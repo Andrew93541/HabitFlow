@@ -2,16 +2,6 @@ import { getLastNDates, shiftDateString } from './dateUtils.js';
 
 /**
  * Calculates the active consecutive-day streak for a habit as of `todayStr`.
- *
- * Rules:
- * - Duplicate completion dates are deduplicated via Set.
- * - If `todayStr` is completed, count consecutive calendar days backward starting from `todayStr`.
- * - If `todayStr` is NOT completed yet, count consecutive calendar days backward starting from
- *   yesterday (`todayStr - 1`). If yesterday was also missed, the streak is 0.
- *
- * @param {string[]} completionDates - Array of YYYY-MM-DD completion dates for this habit
- * @param {string} todayStr - Current local calendar date (YYYY-MM-DD)
- * @returns {number} Non-negative consecutive-day streak count
  */
 export function calculateStreak(completionDates, todayStr) {
   if (!Array.isArray(completionDates) || completionDates.length === 0) {
@@ -35,6 +25,32 @@ export function calculateStreak(completionDates, todayStr) {
 }
 
 /**
+ * Calculates the all-time longest consecutive-day streak from stored completion dates.
+ */
+export function calculateLongestStreak(completionDates) {
+  if (!Array.isArray(completionDates) || completionDates.length === 0) {
+    return 0;
+  }
+
+  const sortedDates = [...new Set(completionDates)].sort();
+  let longest = 1;
+  let currentRun = 1;
+
+  for (let i = 1; i < sortedDates.length; i += 1) {
+    if (shiftDateString(sortedDates[i - 1], 1) === sortedDates[i]) {
+      currentRun += 1;
+      if (currentRun > longest) {
+        longest = currentRun;
+      }
+    } else {
+      currentRun = 1;
+    }
+  }
+
+  return longest;
+}
+
+/**
  * Builds the 7-day completion timeline ending on `todayStr` for visual habit history.
  */
 export function buildRecentHistory(completionDates, todayStr, days = 7) {
@@ -52,14 +68,17 @@ export function formatHabitWithMetrics(habitRow, completionDates, todayStr) {
   const completedSet = new Set(completionDates);
   const completedToday = completedSet.has(todayStr);
   const streak = calculateStreak(completionDates, todayStr);
+  const longestStreak = calculateLongestStreak(completionDates);
 
   return {
     id: habitRow.id,
     name: habitRow.name,
+    category: habitRow.category || 'General',
     description: habitRow.description || '',
     createdAt: habitRow.created_at,
     completedToday,
     streak,
+    longestStreak,
     totalCompletions: completedSet.size,
     recentHistory: buildRecentHistory(completionDates, todayStr, 7),
   };

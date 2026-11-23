@@ -6,24 +6,25 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                   React + Vite Frontend (client/)               │
 │  DashboardPage.jsx ──► StatsCards / HabitList / HabitItem       │
-│         │              HabitFormModal / DeleteConfirmModal      │
+│         │              HabitFormModal / HabitCalendarModal      │
+│         │              DeleteConfirmModal / Export Menu         │
 │         ▼                                                       │
 │   services/api.js (Native fetch + Local YYYY-MM-DD Date)        │
 └───────────────────────────────┬─────────────────────────────────┘
-                                │ HTTP JSON (/api/*)
+                                │ HTTP JSON & CSV (/api/*)
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                Node.js + Express Backend (server/)              │
 │  app.js ──► habitRoutes.js / dashboardRoutes.js                 │
 │         ──► middleware/validate.js & errorHandler.js            │
 │         ──► controllers/habitController.js                      │
-│         ──► utils/streakUtils.js & dateUtils.js                 │
+│         ──► utils/streakUtils.js, dateUtils.js & exportUtils.js │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │ Synchronous ACID Queries (better-sqlite3)
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                SQLite Relational Database (habitflow.db)        │
-│  Table: habits (id PK, name, description, created_at)           │
+│  Table: habits (id PK, name, category, description, created_at) │
 │  Table: habit_completions (id PK, habit_id FK CASCADE,          │
 │                            completion_date, UNIQUE(habit_id,    │
 │                            completion_date))                    │

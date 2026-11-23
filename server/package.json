@@ -10,7 +10,7 @@
     "start": "node server.js",
     "seed": "node db/seed.js",
     "seed:reset": "node db/seed.js --reset",
-    "lint": "node --check server.js && node --check app.js && node --check db/database.js && node --check controllers/habitController.js && node --check controllers/dashboardController.js && node --check utils/streakUtils.js",
+    "lint": "node --check server.js && node --check app.js && node --check db/database.js && node --check controllers/habitController.js && node --check controllers/dashboardController.js && node --check utils/streakUtils.js && node --check utils/exportUtils.js",
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {

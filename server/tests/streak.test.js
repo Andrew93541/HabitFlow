@@ -7,6 +7,12 @@ import {
   shiftDateString,
 } from '../utils/dateUtils.js';
 import {
+  escapeCsvCell,
+  generateHabitsCsv,
+  normalizeCategory,
+} from '../utils/exportUtils.js';
+import {
+  calculateLongestStreak,
   calculateStreak,
   computeDashboardStats,
   formatHabitWithMetrics,
@@ -15,8 +21,8 @@ import {
 describe('Date Utilities', () => {
   it('validates real calendar dates and rejects impossible dates', () => {
     assert.equal(isValidDateString('2026-11-23'), true);
-    assert.equal(isValidDateString('2024-02-29'), true); // leap year
-    assert.equal(isValidDateString('2026-02-29'), false); // non-leap year
+    assert.equal(isValidDateString('2024-02-29'), true);
+    assert.equal(isValidDateString('2026-02-29'), false);
     assert.equal(isValidDateString('2026-13-01'), false);
     assert.equal(isValidDateString('23-11-2026'), false);
     assert.equal(isValidDateString(''), false);
@@ -40,11 +46,12 @@ describe('Date Utilities', () => {
   });
 });
 
-describe('Streak Calculation Engine', () => {
+describe('Streak & Longest Streak Engine', () => {
   const TODAY = '2026-11-23';
 
   it('returns 0 when completion history is empty', () => {
     assert.equal(calculateStreak([], TODAY), 0);
+    assert.equal(calculateLongestStreak([]), 0);
   });
 
   it('returns 1 when completed for the first time today and reverts to 0 if unchecked', () => {
@@ -63,28 +70,39 @@ describe('Streak Calculation Engine', () => {
 
     assert.equal(calculateStreak(throughYesterday, TODAY), 3);
     assert.equal(calculateStreak(withToday, TODAY), 4);
-    // Unchecking today removes TODAY and recalculates from history
     assert.equal(calculateStreak(throughYesterday, TODAY), 3);
   });
 
-  it('breaks the streak (resets to 0) when yesterday was missed', () => {
-    const missedYesterday = ['2026-11-19', '2026-11-20', '2026-11-21']; // missed 2026-11-22
-    assert.equal(calculateStreak(missedYesterday, TODAY), 0);
-
-    // Completing today after a gap starts a fresh streak of 1
-    assert.equal(calculateStreak([...missedYesterday, TODAY], TODAY), 1);
+  it('breaks current streak when yesterday was missed, while preserving historical longestStreak', () => {
+    // 4-day historical run in October, then missed yesterday -> currentStreak=0, longestStreak=4
+    const history = [
+      '2026-10-01',
+      '2026-10-02',
+      '2026-10-03',
+      '2026-10-04',
+      '2026-11-20',
+      '2026-11-21',
+    ];
+    assert.equal(calculateStreak(history, TODAY), 0);
+    assert.equal(calculateLongestStreak(history), 4);
+    assert.equal(calculateStreak([...history, TODAY], TODAY), 1);
   });
 
   it('never double-counts duplicate date entries on the same day', () => {
     const duplicateToday = ['2026-11-22', TODAY, TODAY, TODAY];
     assert.equal(calculateStreak(duplicateToday, TODAY), 2);
+    assert.equal(calculateLongestStreak(duplicateToday), 2);
   });
 
   it('computes dashboard summary statistics accurately', () => {
     const habits = [
-      formatHabitWithMetrics({ id: 1, name: 'A', description: '', created_at: '' }, [TODAY], TODAY),
       formatHabitWithMetrics(
-        { id: 2, name: 'B', description: '', created_at: '' },
+        { id: 1, name: 'A', category: 'Health', description: '', created_at: '' },
+        [TODAY],
+        TODAY
+      ),
+      formatHabitWithMetrics(
+        { id: 2, name: 'B', category: 'Study', description: '', created_at: '' },
         ['2026-11-20', '2026-11-21', '2026-11-22'],
         TODAY
       ),
@@ -97,5 +115,38 @@ describe('Streak Calculation Engine', () => {
       pendingToday: 1,
       bestStreak: 3,
     });
+  });
+});
+
+describe('Category Normalization & CSV Export Security', () => {
+  it('normalizes allowed categories case-insensitively and rejects unknown values', () => {
+    assert.equal(normalizeCategory(undefined), 'General');
+    assert.equal(normalizeCategory('health'), 'Health');
+    assert.equal(normalizeCategory('  STUDY '), 'Study');
+    assert.equal(normalizeCategory('UnknownTag'), null);
+  });
+
+  it('escapes CSV special characters and neutralizes spreadsheet formula injection', () => {
+    assert.equal(escapeCsvCell('=SUM(A1:A5)'), "'=SUM(A1:A5)");
+    assert.equal(escapeCsvCell('+cmd|calc'), "'+cmd|calc");
+    assert.equal(escapeCsvCell('Read "Clean Code", Ch. 1'), '"Read ""Clean Code"", Ch. 1"');
+
+    const csv = generateHabitsCsv([
+      {
+        id: 1,
+        name: '=MaliciousHabit',
+        category: 'Study',
+        description: 'Line 1, Part 2',
+        completedToday: true,
+        streak: 2,
+        longestStreak: 5,
+        totalCompletions: 5,
+        createdAt: '2026-11-01 08:00:00',
+        completionDates: ['2026-11-23', '2026-11-22'],
+      },
+    ]);
+    assert.ok(csv.includes("'=MaliciousHabit"));
+    assert.ok(csv.includes('"Line 1, Part 2"'));
+    assert.ok(csv.includes('2026-11-22; 2026-11-23'));
   });
 });

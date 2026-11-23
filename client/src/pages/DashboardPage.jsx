@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Loader2 } from 'lucide-react';
+import { AlertCircle, Loader2, Tag } from 'lucide-react';
 import DeleteConfirmModal from '../components/DeleteConfirmModal';
 import FeedbackToast from '../components/FeedbackToast';
+import HabitCalendarModal from '../components/HabitCalendarModal';
 import HabitFormModal from '../components/HabitFormModal';
 import HabitList from '../components/HabitList';
 import Header from '../components/Header';
@@ -10,12 +11,14 @@ import StatsCards from '../components/StatsCards';
 import {
   createHabit,
   deleteHabit,
+  downloadHabitsExport,
   fetchDashboardStats,
   fetchHabits,
   getLocalTodayDateString,
   toggleHabit,
   updateHabit,
 } from '../services/api';
+import { HABIT_CATEGORIES } from '../utils/categories';
 
 function deriveStatsFromHabits(habitsList) {
   const totalHabits = habitsList.length;
@@ -38,14 +41,18 @@ export default function DashboardPage() {
     bestStreak: 0,
   });
   const [activeFilter, setActiveFilter] = useState('all');
+  const [selectedCategory, setSelectedCategory] = useState('All');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [loadError, setLoadError] = useState('');
 
   // Modal & in-flight states
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [editingHabit, setEditingHabit] = useState(null);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+
+  const [calendarHabit, setCalendarHabit] = useState(null);
 
   const [deletingHabit, setDeletingHabit] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -89,7 +96,8 @@ export default function DashboardPage() {
       });
     } catch (err) {
       setLoadError(
-        err.message || 'Unable to connect to the HabitFlow server. Please verify the backend is running.'
+        err.message ||
+          'Unable to connect to the HabitFlow server. Please verify the backend is running.'
       );
     } finally {
       setIsLoading(false);
@@ -185,7 +193,6 @@ export default function DashboardPage() {
           : `"${result.habit.name}" marked incomplete.`
       );
     } catch (err) {
-      // Roll back optimistic state on error
       setHabits(previousHabits);
       setStats(previousStats);
       showToast(err.message || 'Failed to update habit completion.', 'error');
@@ -258,21 +265,36 @@ export default function DashboardPage() {
     }
   };
 
+  const handleExportHabits = async (format) => {
+    setIsExporting(true);
+    try {
+      const filename = await downloadHabitsExport(format, getLocalTodayDateString());
+      showToast(`Downloaded ${filename}.`);
+    } catch (err) {
+      showToast(err.message || 'Failed to export habit history.', 'error');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const filteredHabits = useMemo(() => {
-    if (activeFilter === 'completed') {
-      return habits.filter((h) => h.completedToday);
-    }
-    if (activeFilter === 'pending') {
-      return habits.filter((h) => !h.completedToday);
-    }
-    return habits;
-  }, [habits, activeFilter]);
+    return habits.filter((h) => {
+      if (activeFilter === 'completed' && !h.completedToday) return false;
+      if (activeFilter === 'pending' && h.completedToday) return false;
+      if (selectedCategory !== 'All' && (h.category || 'General') !== selectedCategory) {
+        return false;
+      }
+      return true;
+    });
+  }, [habits, activeFilter, selectedCategory]);
 
   const filterTabs = [
     { id: 'all', label: 'All', count: stats.totalHabits },
     { id: 'pending', label: 'Pending', count: stats.pendingToday },
     { id: 'completed', label: 'Completed', count: stats.completedToday },
   ];
+
+  const categoryFilterOptions = ['All', ...HABIT_CATEGORIES];
 
   return (
     <div className="min-h-screen flex bg-[#F7F9F8]">
@@ -288,7 +310,9 @@ export default function DashboardPage() {
           todayStr={todayStr}
           onOpenAddModal={handleOpenAddModal}
           onRefresh={() => loadDashboardData({ silent: true })}
+          onExport={handleExportHabits}
           isRefreshing={isRefreshing}
+          isExporting={isExporting}
         />
 
         <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
@@ -315,7 +339,7 @@ export default function DashboardPage() {
             </div>
           ) : null}
 
-          {/* Habit List Section Header + Filter Pills */}
+          {/* Habit List Section Header + Status & Category Filters */}
           <section aria-labelledby="habits-heading" className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -332,7 +356,7 @@ export default function DashboardPage() {
 
               <div
                 role="tablist"
-                aria-label="Filter habits"
+                aria-label="Filter habits by completion status"
                 className="inline-flex items-center rounded-xl bg-white border border-slate-200/80 p-1 shadow-sm"
               >
                 {filterTabs.map((tab) => {
@@ -357,6 +381,38 @@ export default function DashboardPage() {
               </div>
             </div>
 
+            {/* Category Filter Pills */}
+            {habits.length > 0 ? (
+              <div
+                role="group"
+                aria-label="Filter habits by category"
+                className="flex items-center flex-wrap gap-1.5"
+              >
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 mr-1">
+                  <Tag className="h-3.5 w-3.5" />
+                  Category:
+                </span>
+                {categoryFilterOptions.map((cat) => {
+                  const active = selectedCategory === cat;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setSelectedCategory(cat)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${
+                        active
+                          ? 'bg-slate-800 text-white border-slate-800'
+                          : 'bg-white text-slate-600 border-slate-200/80 hover:bg-slate-50'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+
             {isLoading ? (
               <div
                 data-testid="loading-state"
@@ -370,9 +426,14 @@ export default function DashboardPage() {
                 habits={filteredHabits}
                 totalHabitsCount={habits.length}
                 activeFilter={activeFilter}
-                onResetFilter={() => setActiveFilter('all')}
+                selectedCategory={selectedCategory}
+                onResetFilter={() => {
+                  setActiveFilter('all');
+                  setSelectedCategory('All');
+                }}
                 togglingIds={togglingIds}
                 onToggle={handleToggleHabit}
+                onOpenCalendar={(habit) => setCalendarHabit(habit)}
                 onEdit={handleOpenEditModal}
                 onDelete={(habit) => setDeletingHabit(habit)}
                 onOpenAddModal={handleOpenAddModal}
@@ -393,6 +454,16 @@ export default function DashboardPage() {
             setEditingHabit(null);
           }}
           onSubmit={handleSubmitHabitForm}
+        />
+      ) : null}
+
+      {/* Monthly Calendar Heatmap Modal */}
+      {calendarHabit ? (
+        <HabitCalendarModal
+          key={`calendar-${calendarHabit.id}-${calendarHabit.streak}-${calendarHabit.completedToday}`}
+          habit={calendarHabit}
+          todayStr={todayStr}
+          onClose={() => setCalendarHabit(null)}
         />
       ) : null}
 

@@ -1,14 +1,19 @@
 import { getDb } from '../db/database.js';
 import { resolveTargetDate } from '../utils/dateUtils.js';
+import {
+  generateHabitsCsv,
+  generateHabitsJsonExport,
+  normalizeCategory,
+} from '../utils/exportUtils.js';
 import { computeDashboardStats, formatHabitWithMetrics } from '../utils/streakUtils.js';
 
 /**
  * Queries all habits and their completion history in two indexed queries (no N+1)
- * and enriches each habit with `completedToday`, `streak`, and `recentHistory`.
+ * and enriches each habit with `completedToday`, `streak`, `longestStreak`, and `recentHistory`.
  */
-export function queryAllFormattedHabits(db, todayStr) {
+export function queryAllFormattedHabits(db, todayStr, { includeFullDates = false } = {}) {
   const habits = db
-    .prepare('SELECT id, name, description, created_at FROM habits ORDER BY id ASC')
+    .prepare('SELECT id, name, category, description, created_at FROM habits ORDER BY id ASC')
     .all();
 
   if (habits.length === 0) {
@@ -29,17 +34,22 @@ export function queryAllFormattedHabits(db, todayStr) {
     completionsByHabit.get(row.habit_id).push(row.completion_date);
   }
 
-  return habits.map((habit) =>
-    formatHabitWithMetrics(habit, completionsByHabit.get(habit.id) || [], todayStr)
-  );
+  return habits.map((habit) => {
+    const dates = completionsByHabit.get(habit.id) || [];
+    const formatted = formatHabitWithMetrics(habit, dates, todayStr);
+    if (includeFullDates) {
+      return { ...formatted, completionDates: [...new Set(dates)].sort() };
+    }
+    return formatted;
+  });
 }
 
 /**
  * Queries a single habit by ID and formats it with live streak metrics.
  */
-export function querySingleFormattedHabit(db, habitId, todayStr) {
+export function querySingleFormattedHabit(db, habitId, todayStr, { includeFullDates = false } = {}) {
   const habit = db
-    .prepare('SELECT id, name, description, created_at FROM habits WHERE id = ?')
+    .prepare('SELECT id, name, category, description, created_at FROM habits WHERE id = ?')
     .get(habitId);
 
   if (!habit) {
@@ -53,7 +63,11 @@ export function querySingleFormattedHabit(db, habitId, todayStr) {
     .all(habitId);
 
   const completionDates = completionRows.map((r) => r.completion_date);
-  return formatHabitWithMetrics(habit, completionDates, todayStr);
+  const formatted = formatHabitWithMetrics(habit, completionDates, todayStr);
+  if (includeFullDates) {
+    return { ...formatted, completionDates: [...new Set(completionDates)].sort() };
+  }
+  return formatted;
 }
 
 /**
@@ -62,9 +76,96 @@ export function querySingleFormattedHabit(db, habitId, todayStr) {
 export function getHabits(req, res, next) {
   try {
     const todayStr = resolveTargetDate(req.query.date);
+    const rawCategory = req.query.category;
     const db = getDb();
-    const habits = queryAllFormattedHabits(db, todayStr);
+    let habits = queryAllFormattedHabits(db, todayStr);
+
+    if (rawCategory && rawCategory.toLowerCase() !== 'all') {
+      const normalized = normalizeCategory(rawCategory);
+      if (!normalized) {
+        return res.status(400).json({ error: 'Invalid category filter.' });
+      }
+      habits = habits.filter((h) => h.category === normalized);
+    }
+
     return res.status(200).json(habits);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+/**
+ * GET /api/habits/:id/history
+ * Returns complete completion dates and streak breakdown for the Monthly Calendar Heatmap modal.
+ */
+export function getHabitHistory(req, res, next) {
+  try {
+    const todayStr = resolveTargetDate(req.query.date);
+    const { habitId } = req;
+    const db = getDb();
+
+    const habitWithDates = querySingleFormattedHabit(db, habitId, todayStr, {
+      includeFullDates: true,
+    });
+
+    if (!habitWithDates) {
+      return res.status(404).json({ error: 'Habit not found.' });
+    }
+
+    return res.status(200).json({
+      habitId: habitWithDates.id,
+      name: habitWithDates.name,
+      category: habitWithDates.category,
+      description: habitWithDates.description,
+      completedToday: habitWithDates.completedToday,
+      streak: habitWithDates.streak,
+      longestStreak: habitWithDates.longestStreak,
+      totalCompletions: habitWithDates.totalCompletions,
+      completionDates: habitWithDates.completionDates,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+/**
+ * GET /api/habits/export?format=csv|json&date=YYYY-MM-DD
+ * Exports all habits and completion history as a downloadable CSV or JSON file.
+ */
+export function exportHabitsData(req, res, next) {
+  try {
+    const todayStr = resolveTargetDate(req.query.date);
+    const format = String(req.query.format || 'json').toLowerCase();
+
+    if (format !== 'csv' && format !== 'json') {
+      return res.status(400).json({
+        error: 'Invalid export format. Supported formats: "csv" or "json".',
+      });
+    }
+
+    const db = getDb();
+    const habitsWithHistory = queryAllFormattedHabits(db, todayStr, {
+      includeFullDates: true,
+    });
+    const stats = computeDashboardStats(habitsWithHistory);
+
+    if (format === 'csv') {
+      const csvString = generateHabitsCsv(habitsWithHistory);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="habitflow-export-${todayStr}.csv"`
+      );
+      return res.status(200).send(csvString);
+    }
+
+    const jsonPayload = generateHabitsJsonExport(habitsWithHistory, stats, todayStr);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="habitflow-export-${todayStr}.json"`
+    );
+    return res.status(200).send(JSON.stringify(jsonPayload, null, 2));
   } catch (err) {
     return next(err);
   }
@@ -76,12 +177,12 @@ export function getHabits(req, res, next) {
 export function createHabit(req, res, next) {
   try {
     const todayStr = resolveTargetDate(req.body?.date ?? req.query.date);
-    const { name, description } = req.validatedHabit;
+    const { name, category, description } = req.validatedHabit;
     const db = getDb();
 
     const result = db
-      .prepare('INSERT INTO habits (name, description) VALUES (?, ?)')
-      .run(name, description);
+      .prepare('INSERT INTO habits (name, category, description) VALUES (?, ?, ?)')
+      .run(name, category, description);
 
     const createdHabit = querySingleFormattedHabit(db, Number(result.lastInsertRowid), todayStr);
     return res.status(201).json(createdHabit);
@@ -96,13 +197,13 @@ export function createHabit(req, res, next) {
 export function updateHabit(req, res, next) {
   try {
     const todayStr = resolveTargetDate(req.body?.date ?? req.query.date);
-    const { name, description } = req.validatedHabit;
+    const { name, category, description } = req.validatedHabit;
     const { habitId } = req;
     const db = getDb();
 
     const result = db
-      .prepare('UPDATE habits SET name = ?, description = ? WHERE id = ?')
-      .run(name, description, habitId);
+      .prepare('UPDATE habits SET name = ?, category = ?, description = ? WHERE id = ?')
+      .run(name, category, description, habitId);
 
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Habit not found.' });
@@ -139,8 +240,6 @@ export function deleteHabit(req, res, next) {
 
 /**
  * POST /api/habits/:id/toggle
- * Atomically toggles (or explicitly sets via optional `completed` boolean)
- * today's completion record for the specified habit and recalculates streaks.
  */
 export function toggleHabitCompletion(req, res, next) {
   try {
@@ -171,7 +270,6 @@ export function toggleHabitCompletion(req, res, next) {
         desiredState !== undefined ? desiredState : !existingCompletion;
 
       if (shouldComplete) {
-        // INSERT OR IGNORE + UNIQUE(habit_id, completion_date) guarantees no duplicate day entries
         db.prepare(
           'INSERT OR IGNORE INTO habit_completions (habit_id, completion_date) VALUES (?, ?)'
         ).run(habitId, todayStr);

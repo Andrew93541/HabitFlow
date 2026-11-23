@@ -15,10 +15,12 @@ A clean, modern, full-stack daily habit tracker built with **React (Vite + Tailw
    - If today is still pending, displays the active streak earned through yesterday.
    - Missing a calendar day resets the streak to `0`.
    - Duplicate completions on the same calendar day are prevented in both the API (`INSERT OR IGNORE`) and SQLite schema (`UNIQUE(habit_id, completion_date)`).
-4. **Full Habit CRUD** — Add new habits (name + optional description), edit existing habits, and delete habits with a confirmation modal (`ON DELETE CASCADE` removes associated completion history).
-5. **Dashboard Summary Cards** — Live metrics for **Total Habits**, **Completed Today**, **Pending Today**, and **Best Streak**.
-6. **Local Calendar Date Consistency** — Uses local `YYYY-MM-DD` calendar dates end-to-end rather than UTC `.toISOString()`, preventing midnight timezone mismatches.
-7. **Responsive Minimalist UI** — Soft off-white background (`#F7F9F8`), emerald accents, desktop sidebar with daily progress bar, mobile header, filter tabs (`All` / `Pending` / `Completed`), empty state, loading spinner, toast notifications, and error recovery banner.
+4. **Full Habit CRUD & Categories** — Add new habits (name, category tag such as *Health*, *Study*, *Fitness*, *Mindfulness*, *Productivity*, and optional description), filter by category, edit existing habits, and delete habits with a confirmation modal (`ON DELETE CASCADE` removes associated completion history).
+5. **Monthly Calendar Heatmap Modal** — Open any habit's **Calendar** view to explore a month-by-month emerald heatmap of completed days, monthly completion rate, current streak, and all-time longest streak.
+6. **One-Click CSV & JSON Export** — Export all habits and full completion history from the header **Export** menu as spreadsheet-ready `.csv` or structured `.json`.
+7. **Dashboard Summary Cards** — Live metrics for **Total Habits**, **Completed Today**, **Pending Today**, and **Best Streak**.
+8. **Local Calendar Date Consistency** — Uses local `YYYY-MM-DD` calendar dates end-to-end rather than UTC `.toISOString()`, preventing midnight timezone mismatches.
+9. **Responsive Minimalist UI** — Soft off-white background (`#F7F9F8`), emerald accents, desktop sidebar with daily progress bar, mobile header, filter tabs (`All` / `Pending` / `Completed`), empty state, loading spinner, toast notifications, and error recovery banner.
 
 ---
 
@@ -153,9 +155,11 @@ npm run build
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/habits?date=YYYY-MM-DD` | Returns all habits with `completedToday`, `streak`, and 7-day `recentHistory`. |
-| `POST` | `/api/habits` | Creates a new habit (`{ name, description? }`). |
-| `PUT` | `/api/habits/:id` | Updates an existing habit's `name` and `description`. |
+| `GET` | `/api/habits?date=YYYY-MM-DD&category=...` | Returns habits (optionally filtered by category) with `completedToday`, `streak`, `longestStreak`, and 7-day `recentHistory`. |
+| `GET` | `/api/habits/:id/history?date=YYYY-MM-DD` | Returns full `completionDates`, `streak`, `longestStreak`, and `totalCompletions` for the Monthly Calendar Heatmap modal. |
+| `GET` | `/api/habits/export?format=csv\|json` | Downloads complete habit & completion history as `.csv` or `.json`. |
+| `POST` | `/api/habits` | Creates a new habit (`{ name, category?, description? }`). |
+| `PUT` | `/api/habits/:id` | Updates an existing habit's `name`, `category`, and `description`. |
 | `DELETE` | `/api/habits/:id` | Deletes a habit and cascades deletion to its `habit_completions`. |
 | `POST` | `/api/habits/:id/toggle` | Toggles (or sets via `{ date, completed }`) today's completion in an atomic transaction and returns `{ habit, stats }`. |
 | `GET` | `/api/dashboard/stats?date=YYYY-MM-DD` | Returns `{ totalHabits, completedToday, pendingToday, bestStreak, date }`. |

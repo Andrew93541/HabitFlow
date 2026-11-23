@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { HABIT_CATEGORIES } from '../utils/categories';
 
 export default function HabitFormModal({
   editingHabit,
@@ -8,6 +9,7 @@ export default function HabitFormModal({
   onSubmit,
 }) {
   const [name, setName] = useState(() => editingHabit?.name || '');
+  const [category, setCategory] = useState(() => editingHabit?.category || 'General');
   const [description, setDescription] = useState(() => editingHabit?.description || '');
   const [validationError, setValidationError] = useState('');
 
@@ -44,6 +46,7 @@ export default function HabitFormModal({
     setValidationError('');
     await onSubmit({
       name: trimmedName,
+      category,
       description: trimmedDescription,
     });
   };
@@ -102,6 +105,39 @@ export default function HabitFormModal({
               disabled={isSubmitting}
               className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
+          </div>
+
+          {/* Category Selector */}
+          <div>
+            <span className="block text-sm font-semibold text-slate-700 mb-2">
+              Category
+            </span>
+            <div
+              role="radiogroup"
+              aria-label="Habit category"
+              className="flex flex-wrap gap-2"
+            >
+              {HABIT_CATEGORIES.map((cat) => {
+                const selected = category === cat;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    disabled={isSubmitting}
+                    onClick={() => setCategory(cat)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+                      selected
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div>

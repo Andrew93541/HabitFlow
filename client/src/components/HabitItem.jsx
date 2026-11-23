@@ -1,13 +1,23 @@
-import { Check, Flame, Pencil, Trash2 } from 'lucide-react';
+import { CalendarDays, Check, Flame, Pencil, Trash2 } from 'lucide-react';
+import { getCategoryBadgeClass } from '../utils/categories';
 
 export default function HabitItem({
   habit,
   isToggling,
   onToggle,
+  onOpenCalendar,
   onEdit,
   onDelete,
 }) {
-  const { id, name, description, completedToday, streak, recentHistory = [] } = habit;
+  const {
+    id,
+    name,
+    category = 'General',
+    description,
+    completedToday,
+    streak,
+    recentHistory = [],
+  } = habit;
 
   return (
     <article
@@ -47,15 +57,26 @@ export default function HabitItem({
         {/* Habit Details — Core Requirement: Completed habit shows GREEN TEXT */}
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <label
-              htmlFor={`habit-checkbox-${id}`}
-              data-testid={`habit-name-${id}`}
-              className={`text-base sm:text-[17px] font-semibold leading-snug cursor-pointer transition-colors duration-200 break-words ${
-                completedToday ? 'text-emerald-600' : 'text-slate-800'
-              }`}
-            >
-              {name}
-            </label>
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              <label
+                htmlFor={`habit-checkbox-${id}`}
+                data-testid={`habit-name-${id}`}
+                className={`text-base sm:text-[17px] font-semibold leading-snug cursor-pointer transition-colors duration-200 break-words ${
+                  completedToday ? 'text-emerald-600' : 'text-slate-800'
+                }`}
+              >
+                {name}
+              </label>
+
+              <span
+                data-testid={`habit-category-${id}`}
+                className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border ${getCategoryBadgeClass(
+                  category
+                )}`}
+              >
+                {category}
+              </span>
+            </div>
 
             {/* Streak & Completion Status Badges */}
             <div className="flex items-center flex-wrap gap-2 shrink-0">
@@ -101,7 +122,7 @@ export default function HabitItem({
             </p>
           ) : null}
 
-          {/* Bottom Row: 7-Day Activity Dots & Edit/Delete Controls */}
+          {/* Bottom Row: 7-Day Activity Dots & Calendar/Edit/Delete Controls */}
           <div className="mt-3 pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
             {recentHistory.length > 0 ? (
               <div
@@ -126,6 +147,16 @@ export default function HabitItem({
             )}
 
             <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onOpenCalendar(habit)}
+                aria-label={`View calendar heatmap for "${name}"`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <CalendarDays className="h-3.5 w-3.5" />
+                <span>Calendar</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => onEdit(habit)}

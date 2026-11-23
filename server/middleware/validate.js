@@ -1,3 +1,5 @@
+import { ALLOWED_CATEGORIES, normalizeCategory } from '../utils/exportUtils.js';
+
 /**
  * Validates :id route parameter as a positive integer.
  */
@@ -13,7 +15,7 @@ export function validateHabitId(req, res, next) {
 }
 
 /**
- * Validates POST / PUT habit payloads (name required, optional description).
+ * Validates POST / PUT habit payloads (name required, optional category & description).
  */
 export function validateHabitPayload(req, res, next) {
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
@@ -24,6 +26,7 @@ export function validateHabitPayload(req, res, next) {
 
   const rawName = req.body.name;
   const rawDescription = req.body.description ?? '';
+  const normalizedCategory = normalizeCategory(req.body.category);
 
   if (typeof rawName !== 'string') {
     return res.status(400).json({
@@ -44,6 +47,12 @@ export function validateHabitPayload(req, res, next) {
     });
   }
 
+  if (!normalizedCategory) {
+    return res.status(400).json({
+      error: `Invalid category. Allowed categories: ${ALLOWED_CATEGORIES.join(', ')}.`,
+    });
+  }
+
   if (typeof rawDescription !== 'string') {
     return res.status(400).json({
       error: 'Habit description must be text.',
@@ -57,6 +66,10 @@ export function validateHabitPayload(req, res, next) {
     });
   }
 
-  req.validatedHabit = { name, description };
+  req.validatedHabit = {
+    name,
+    category: normalizedCategory,
+    description,
+  };
   return next();
 }

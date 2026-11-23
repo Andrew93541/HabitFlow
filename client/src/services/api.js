@@ -59,17 +59,28 @@ export function fetchDashboardStats(localDate = getLocalTodayDateString()) {
   return requestJson(`/dashboard/stats?date=${encodeURIComponent(localDate)}`);
 }
 
-export function createHabit({ name, description = '' }, localDate = getLocalTodayDateString()) {
+export function fetchHabitHistory(id, localDate = getLocalTodayDateString()) {
+  return requestJson(`/habits/${id}/history?date=${encodeURIComponent(localDate)}`);
+}
+
+export function createHabit(
+  { name, category = 'General', description = '' },
+  localDate = getLocalTodayDateString()
+) {
   return requestJson('/habits', {
     method: 'POST',
-    body: JSON.stringify({ name, description, date: localDate }),
+    body: JSON.stringify({ name, category, description, date: localDate }),
   });
 }
 
-export function updateHabit(id, { name, description = '' }, localDate = getLocalTodayDateString()) {
+export function updateHabit(
+  id,
+  { name, category = 'General', description = '' },
+  localDate = getLocalTodayDateString()
+) {
   return requestJson(`/habits/${id}`, {
     method: 'PUT',
-    body: JSON.stringify({ name, description, date: localDate }),
+    body: JSON.stringify({ name, category, description, date: localDate }),
   });
 }
 
@@ -84,4 +95,42 @@ export function toggleHabit(id, { date = getLocalTodayDateString(), completed } 
     method: 'POST',
     body: JSON.stringify({ date, completed }),
   });
+}
+
+/**
+ * Downloads habits & completion history as a CSV or JSON file.
+ */
+export async function downloadHabitsExport(
+  format = 'csv',
+  localDate = getLocalTodayDateString()
+) {
+  const normalizedFormat = format === 'json' ? 'json' : 'csv';
+  const response = await fetch(
+    `${API_BASE_URL}/habits/export?format=${normalizedFormat}&date=${encodeURIComponent(localDate)}`
+  );
+
+  if (!response.ok) {
+    let errorMessage = `Export failed with status ${response.status}`;
+    try {
+      const errJson = await response.json();
+      if (errJson?.error) errorMessage = errJson.error;
+    } catch {
+      // Ignore JSON parse fallback errors
+    }
+    throw new Error(errorMessage);
+  }
+
+  const blob = await response.blob();
+  const filename = `habitflow-export-${localDate}.${normalizedFormat}`;
+  const objectUrl = URL.createObjectURL(blob);
+
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+
+  return filename;
 }

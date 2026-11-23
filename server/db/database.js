@@ -8,7 +8,8 @@ import { seedDatabaseIfNeeded } from './seed.js';
 let dbInstance = null;
 
 /**
- * Initializes the SQLite schema, constraints, indexes, and WAL/FK pragmas.
+ * Initializes the SQLite schema, runs non-destructive v2 category migration if needed,
+ * and configures WAL + Foreign Key enforcement.
  */
 export function initializeSchema(db) {
   db.pragma('journal_mode = WAL');
@@ -18,6 +19,7 @@ export function initializeSchema(db) {
     CREATE TABLE IF NOT EXISTS habits (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL CHECK(length(trim(name)) > 0 AND length(name) <= 100),
+      category TEXT NOT NULL DEFAULT 'General' CHECK(length(trim(category)) > 0 AND length(category) <= 30),
       description TEXT NOT NULL DEFAULT '' CHECK(length(description) <= 300),
       created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
@@ -40,10 +42,43 @@ export function initializeSchema(db) {
       value TEXT NOT NULL
     );
   `);
+
+  // Safe idempotent migration for databases created before the category column existed
+  const habitColumns = db.prepare('PRAGMA table_info(habits)').all();
+  const hasCategoryColumn = habitColumns.some((col) => col.name === 'category');
+  if (!hasCategoryColumn) {
+    db.exec("ALTER TABLE habits ADD COLUMN category TEXT NOT NULL DEFAULT 'General'");
+  }
+
+  // Backfill categories once for default v1 sample habits if upgrading an existing DB
+  const backfilled = db
+    .prepare("SELECT value FROM app_meta WHERE key = 'category_backfill_v2'")
+    .get();
+
+  if (!backfilled) {
+    const runBackfill = db.transaction(() => {
+      db.prepare(
+        "UPDATE habits SET category = 'Health' WHERE name = 'Morning Hydration (500ml Water)' AND category = 'General'"
+      ).run();
+      db.prepare(
+        "UPDATE habits SET category = 'Study' WHERE name = 'Read 20 Pages of Technical Book' AND category = 'General'"
+      ).run();
+      db.prepare(
+        "UPDATE habits SET category = 'Productivity' WHERE name = '45-Minute Coding & DSA Practice' AND category = 'General'"
+      ).run();
+      db.prepare(
+        "UPDATE habits SET category = 'Fitness' WHERE name = 'Evening Outdoor Walk' AND category = 'General'"
+      ).run();
+      db.prepare(
+        "INSERT OR REPLACE INTO app_meta (key, value) VALUES ('category_backfill_v2', ?)"
+      ).run(new Date().toISOString());
+    });
+    runBackfill();
+  }
 }
 
 /**
- * Creates a fresh SQLite connection (used directly by isolated tests or singleton app startup).
+ * Creates a fresh SQLite connection.
  */
 export function createDatabaseConnection(dbPath = env.DB_PATH, { autoSeed = env.AUTO_SEED } = {}) {
   if (dbPath !== ':memory:') {
@@ -60,9 +95,6 @@ export function createDatabaseConnection(dbPath = env.DB_PATH, { autoSeed = env.
   return db;
 }
 
-/**
- * Returns the active SQLite database instance.
- */
 export function getDb() {
   if (!dbInstance) {
     dbInstance = createDatabaseConnection();
@@ -70,9 +102,6 @@ export function getDb() {
   return dbInstance;
 }
 
-/**
- * Overrides the active database instance (useful for integration testing) or closes it cleanly.
- */
 export function setDb(customDb) {
   dbInstance = customDb;
 }
