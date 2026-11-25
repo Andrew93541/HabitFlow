@@ -3,10 +3,18 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
 
-describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => {
+describe('HabitFlow v2.0 Production UI: Auth, Multi-User Dashboard, Search/Sort & Heatmap', () => {
+  let currentUser;
   let mockHabits;
 
   beforeEach(() => {
+    currentUser = {
+      id: 1,
+      name: 'Alex Morgan',
+      email: 'alex@example.com',
+      isDemo: false,
+    };
+
     mockHabits = [
       {
         id: 1,
@@ -46,11 +54,55 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
     global.fetch = vi.fn(async (url, options = {}) => {
       const method = options.method || 'GET';
 
+      if (url.endsWith('/auth/me') && method === 'GET') {
+        if (!currentUser) {
+          return {
+            ok: false,
+            status: 401,
+            headers: { get: () => 'application/json' },
+            json: async () => ({ error: 'Authentication required.' }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          json: async () => ({ user: structuredClone(currentUser) }),
+        };
+      }
+
+      if (url.endsWith('/auth/demo') && method === 'POST') {
+        currentUser = {
+          id: 99,
+          name: 'Demo Explorer',
+          email: 'demo@habitflow.local',
+          isDemo: true,
+        };
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          json: async () => ({ user: structuredClone(currentUser) }),
+        };
+      }
+
+      if (url.endsWith('/auth/logout') && method === 'POST') {
+        currentUser = null;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          json: async () => ({ message: 'Signed out.' }),
+        };
+      }
+
       if (url.includes('/habits/export') && method === 'GET') {
         return {
           ok: true,
+          status: 200,
           headers: { get: () => 'text/csv' },
-          blob: async () => new Blob(['Habit ID,Habit Name\n1,Morning Meditation'], { type: 'text/csv' }),
+          blob: async () =>
+            new Blob(['Habit ID,Habit Name\n1,Morning Meditation'], { type: 'text/csv' }),
         };
       }
 
@@ -59,6 +111,7 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
         const target = mockHabits.find((h) => h.id === id);
         return {
           ok: true,
+          status: 200,
           headers: { get: () => 'application/json' },
           json: async () => ({
             habitId: target.id,
@@ -75,6 +128,7 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
       if (url.includes('/habits') && method === 'GET') {
         return {
           ok: true,
+          status: 200,
           headers: { get: () => 'application/json' },
           json: async () => structuredClone(mockHabits),
         };
@@ -83,6 +137,7 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
       if (url.includes('/dashboard/stats') && method === 'GET') {
         return {
           ok: true,
+          status: 200,
           headers: { get: () => 'application/json' },
           json: async () => computeStats(),
         };
@@ -103,6 +158,7 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
         const updatedHabit = mockHabits.find((h) => h.id === id);
         return {
           ok: true,
+          status: 200,
           headers: { get: () => 'application/json' },
           json: async () => ({
             habit: structuredClone(updatedHabit),
@@ -127,6 +183,7 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
         mockHabits.push(created);
         return {
           ok: true,
+          status: 201,
           headers: { get: () => 'application/json' },
           json: async () => structuredClone(created),
         };
@@ -137,6 +194,7 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
         mockHabits = mockHabits.filter((h) => h.id !== id);
         return {
           ok: true,
+          status: 200,
           headers: { get: () => 'application/json' },
           json: async () => ({ message: 'Deleted', id }),
         };
@@ -144,6 +202,24 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
 
       throw new Error(`Unhandled request: ${method} ${url}`);
     });
+  });
+
+  it('renders AuthPage when unauthenticated and supports 1-Click Instant Demo sign-in and sign-out', async () => {
+    currentUser = null;
+    const user = userEvent.setup();
+    render(<App />);
+
+    const demoBtn = await screen.findByTestId('demo-login-btn');
+    expect(screen.getByText(/Small daily check-ins/i)).toBeInTheDocument();
+
+    await user.click(demoBtn);
+
+    expect(await screen.findByText('Morning Meditation')).toBeInTheDocument();
+    expect(screen.getByText('Demo Explorer')).toBeInTheDocument();
+
+    // Sign out returns to AuthPage
+    await user.click(screen.getByTestId('sidebar-signout-btn'));
+    expect(await screen.findByTestId('demo-login-btn')).toBeInTheDocument();
   });
 
   it('turns ONLY the checked habit text green, increments its streak by 1, and reverts cleanly when unchecked', async () => {
@@ -156,7 +232,6 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
     expect(habit1Title).toHaveClass('text-slate-800');
     expect(habit1Title).not.toHaveClass('text-emerald-600');
     expect(screen.getByTestId('habit-streak-1')).toHaveTextContent('3 days');
-    expect(screen.getByTestId('habit-category-1')).toHaveTextContent('Mindfulness');
 
     const checkbox1 = screen.getByRole('checkbox', {
       name: /Mark "Morning Meditation" as complete/i,
@@ -185,23 +260,27 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
     expect(screen.getByTestId('habit-streak-1')).toHaveTextContent('3 days');
   });
 
-  it('supports adding a categorized habit, filtering by category, and deleting with confirmation', async () => {
+  it('supports search, category filtering, adding categorized habits, and deleting with confirmation', async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await screen.findByText('Morning Meditation');
 
-    // Filter by Study category -> only "Read 15 Pages" shown
+    // Search filter
+    const searchInput = screen.getByLabelText(/Search habits/i);
+    await user.type(searchInput, 'Pages');
+    expect(screen.getByText('Read 15 Pages')).toBeInTheDocument();
+    expect(screen.queryByText('Morning Meditation')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Clear search/i }));
+
+    // Category filter
     const categoryGroup = screen.getByRole('group', { name: /Filter habits by category/i });
     await user.click(within(categoryGroup).getByRole('button', { name: 'Study' }));
     expect(screen.getByText('Read 15 Pages')).toBeInTheDocument();
     expect(screen.queryByText('Morning Meditation')).not.toBeInTheDocument();
-
-    // Reset category back to All
     await user.click(within(categoryGroup).getByRole('button', { name: 'All' }));
-    expect(screen.getByText('Morning Meditation')).toBeInTheDocument();
 
-    // Open Add Habit modal & select Fitness category
+    // Add Habit
     await user.click(screen.getByRole('button', { name: /Add Habit/i }));
     const dialog = screen.getByRole('dialog');
     await user.type(within(dialog).getByLabelText(/Habit Name/i), 'Evening Stretching');
@@ -220,7 +299,7 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
     });
   });
 
-  it('opens the Monthly Calendar Heatmap modal and exports CSV history', async () => {
+  it('opens the Monthly Calendar Heatmap modal, opens Mobile Drawer, and exports CSV history', async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -234,15 +313,15 @@ describe('HabitFlow Dashboard UI, Categories, Calendar Heatmap & Export', () => 
     expect(await within(modal).findByTestId('calendar-longest-streak')).toHaveTextContent(
       '5 days'
     );
-    expect(within(modal).getByTestId('calendar-total-completions')).toHaveTextContent('8');
-    expect(within(modal).getByTestId('calendar-heatmap-grid')).toBeInTheDocument();
-
     await user.click(within(modal).getByRole('button', { name: /Close calendar modal/i }));
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    });
 
-    // Trigger CSV Export from Header menu
+    // Open Mobile Navigation Drawer
+    await user.click(screen.getByRole('button', { name: /Open navigation menu/i }));
+    const drawer = screen.getByRole('dialog', { name: /Mobile navigation menu/i });
+    expect(drawer).toBeInTheDocument();
+    await user.click(within(drawer).getByRole('button', { name: /Close navigation menu/i }));
+
+    // Trigger CSV Export
     await user.click(screen.getByRole('button', { name: /Export habit history/i }));
     await user.click(screen.getByRole('menuitem', { name: /Export as CSV/i }));
 

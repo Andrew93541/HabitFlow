@@ -2,7 +2,6 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/
 
 /**
  * Formats the browser's current local calendar date as YYYY-MM-DD.
- * Prevents UTC midnight timezone mismatches between browser and server.
  */
 export function getLocalTodayDateString(date = new Date()) {
   const year = date.getFullYear();
@@ -26,12 +25,14 @@ export function formatDisplayDate(dateStr) {
 }
 
 /**
- * Shared fetch wrapper with JSON parsing and friendly error handling.
+ * Shared fetch wrapper with credentials, CSRF header, and structured error handling.
  */
-async function requestJson(endpoint, options = {}) {
+async function requestJson(endpoint, options = {}, { suppressUnauthorizedEvent = false } = {}) {
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      'X-Requested-With': 'HabitFlow',
       ...(options.headers || {}),
     },
     ...options,
@@ -44,12 +45,100 @@ async function requestJson(endpoint, options = {}) {
   }
 
   if (!response.ok) {
+    if (response.status === 401 && !suppressUnauthorizedEvent && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('habitflow:unauthorized'));
+    }
     const message = data?.error || `Request failed with status ${response.status}`;
-    throw new Error(message);
+    const err = new Error(message);
+    err.status = response.status;
+    throw err;
   }
 
   return data;
 }
+
+/* ========================= Authentication & Account APIs ========================= */
+
+export function fetchCurrentUser() {
+  return requestJson('/auth/me', {}, { suppressUnauthorizedEvent: true });
+}
+
+export function registerAccount(
+  { name, email, password, includeStarterHabits = true },
+  localDate = getLocalTodayDateString()
+) {
+  return requestJson(
+    '/auth/register',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        email,
+        password,
+        includeStarterHabits,
+        date: localDate,
+      }),
+    },
+    { suppressUnauthorizedEvent: true }
+  );
+}
+
+export function loginAccount({ email, password }) {
+  return requestJson(
+    '/auth/login',
+    {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    },
+    { suppressUnauthorizedEvent: true }
+  );
+}
+
+export function loginDemoAccount(localDate = getLocalTodayDateString()) {
+  return requestJson(
+    '/auth/demo',
+    {
+      method: 'POST',
+      body: JSON.stringify({ date: localDate }),
+    },
+    { suppressUnauthorizedEvent: true }
+  );
+}
+
+export function logoutAccount() {
+  return requestJson('/auth/logout', { method: 'POST' }, { suppressUnauthorizedEvent: true });
+}
+
+export function updateAccountProfile({ name }) {
+  return requestJson('/auth/profile', {
+    method: 'PUT',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function changeAccountPassword({ currentPassword, newPassword }) {
+  return requestJson(
+    '/auth/password',
+    {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    },
+    { suppressUnauthorizedEvent: true }
+  );
+}
+
+export function deleteAccountPermanent({ password }) {
+  return requestJson(
+    '/auth/account',
+    {
+      method: 'DELETE',
+      body: JSON.stringify({ password }),
+    },
+    { suppressUnauthorizedEvent: true }
+  );
+}
+
+/* ============================ Habits & Dashboard APIs ============================ */
 
 export function fetchHabits(localDate = getLocalTodayDateString()) {
   return requestJson(`/habits?date=${encodeURIComponent(localDate)}`);
@@ -97,6 +186,14 @@ export function toggleHabit(id, { date = getLocalTodayDateString(), completed } 
   });
 }
 
+export function importHabitsBackup(payload, localDate = getLocalTodayDateString()) {
+  const habitsArray = Array.isArray(payload) ? payload : payload?.habits;
+  return requestJson('/habits/import', {
+    method: 'POST',
+    body: JSON.stringify({ habits: habitsArray, date: localDate }),
+  });
+}
+
 /**
  * Downloads habits & completion history as a CSV or JSON file.
  */
@@ -106,10 +203,19 @@ export async function downloadHabitsExport(
 ) {
   const normalizedFormat = format === 'json' ? 'json' : 'csv';
   const response = await fetch(
-    `${API_BASE_URL}/habits/export?format=${normalizedFormat}&date=${encodeURIComponent(localDate)}`
+    `${API_BASE_URL}/habits/export?format=${normalizedFormat}&date=${encodeURIComponent(localDate)}`,
+    {
+      credentials: 'include',
+      headers: {
+        'X-Requested-With': 'HabitFlow',
+      },
+    }
   );
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('habitflow:unauthorized'));
+    }
     let errorMessage = `Export failed with status ${response.status}`;
     try {
       const errJson = await response.json();

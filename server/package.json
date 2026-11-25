@@ -1,16 +1,17 @@
 {
   "name": "habitflow-server",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "HabitFlow Express + SQLite REST API backend",
+  "description": "HabitFlow Express + SQLite Multi-Tenant REST API backend",
   "main": "server.js",
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
     "seed": "node db/seed.js",
     "seed:reset": "node db/seed.js --reset",
-    "lint": "node --check server.js && node --check app.js && node --check db/database.js && node --check controllers/habitController.js && node --check controllers/dashboardController.js && node --check utils/streakUtils.js && node --check utils/exportUtils.js",
+    "backup": "node db/backup.js",
+    "lint": "node --check server.js && node --check app.js && node --check db/database.js && node --check db/backup.js && node --check controllers/authController.js && node --check controllers/habitController.js && node --check controllers/dashboardController.js && node --check middleware/authMiddleware.js && node --check middleware/csrfMiddleware.js && node --check middleware/rateLimiter.js && node --check utils/authUtils.js && node --check utils/streakUtils.js && node --check utils/exportUtils.js",
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {

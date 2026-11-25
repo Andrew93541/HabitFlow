@@ -3,10 +3,11 @@ node_modules/
 client/node_modules/
 server/node_modules/
 
-# SQLite Database files
+# SQLite Database & Backups
 server/data/*.db
 server/data/*.db-shm
 server/data/*.db-wal
+server/backups/
 *.sqlite
 *.sqlite3
 

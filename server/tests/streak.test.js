@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  generateSessionToken,
+  hashPassword,
+  hashSessionToken,
+  parseCookies,
+  serializeSessionCookie,
+  verifyPassword,
+} from '../utils/authUtils.js';
+import {
   getLastNDates,
   isValidDateString,
   resolveTargetDate,
@@ -20,11 +28,11 @@ import {
 
 describe('Date Utilities', () => {
   it('validates real calendar dates and rejects impossible dates', () => {
-    assert.equal(isValidDateString('2026-11-23'), true);
+    assert.equal(isValidDateString('2026-11-25'), true);
     assert.equal(isValidDateString('2024-02-29'), true);
     assert.equal(isValidDateString('2026-02-29'), false);
     assert.equal(isValidDateString('2026-13-01'), false);
-    assert.equal(isValidDateString('23-11-2026'), false);
+    assert.equal(isValidDateString('25-11-2026'), false);
     assert.equal(isValidDateString(''), false);
   });
 
@@ -74,7 +82,6 @@ describe('Streak & Longest Streak Engine', () => {
   });
 
   it('breaks current streak when yesterday was missed, while preserving historical longestStreak', () => {
-    // 4-day historical run in October, then missed yesterday -> currentStreak=0, longestStreak=4
     const history = [
       '2026-10-01',
       '2026-10-02',
@@ -115,6 +122,38 @@ describe('Streak & Longest Streak Engine', () => {
       pendingToday: 1,
       bestStreak: 3,
     });
+  });
+});
+
+describe('Auth Crypto & Cookie Security Utilities', () => {
+  it('hashes passwords with unique random salts and verifies in constant time', () => {
+    const hash1 = hashPassword('CorrectHorseBatteryStaple!');
+    const hash2 = hashPassword('CorrectHorseBatteryStaple!');
+    assert.notEqual(hash1, hash2); // Unique random salt per call
+
+    assert.equal(verifyPassword('CorrectHorseBatteryStaple!', hash1), true);
+    assert.equal(verifyPassword('WrongPassword!', hash1), false);
+    assert.equal(verifyPassword(' anything ', 'malformed-hash'), false);
+  });
+
+  it('generates opaque session tokens, hashes with SHA-256, and parses cookies safely', () => {
+    const raw = generateSessionToken();
+    const digest = hashSessionToken(raw);
+    assert.equal(raw.length >= 40, true);
+    assert.notEqual(raw, digest);
+    assert.equal(digest.length, 64);
+
+    const parsed = parseCookies('habitflow_sid=abc%20123; __proto__=polluted');
+    assert.equal(parsed.habitflow_sid, 'abc 123');
+    assert.equal(Object.getPrototypeOf(parsed), null);
+
+    const cookieHeader = serializeSessionCookie('habitflow_sid', 'tok123', {
+      maxAgeSeconds: 3600,
+      secure: true,
+    });
+    assert.ok(cookieHeader.includes('HttpOnly'));
+    assert.ok(cookieHeader.includes('SameSite=Lax'));
+    assert.ok(cookieHeader.includes('Secure'));
   });
 });
 

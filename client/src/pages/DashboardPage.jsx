@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Loader2, Tag } from 'lucide-react';
+import { AlertCircle, ArrowUpDown, Loader2, Search, Tag, X } from 'lucide-react';
+import AccountSettingsModal from '../components/AccountSettingsModal';
 import DeleteConfirmModal from '../components/DeleteConfirmModal';
 import FeedbackToast from '../components/FeedbackToast';
 import HabitCalendarModal from '../components/HabitCalendarModal';
 import HabitFormModal from '../components/HabitFormModal';
 import HabitList from '../components/HabitList';
 import Header from '../components/Header';
+import ImportBackupModal from '../components/ImportBackupModal';
 import Sidebar from '../components/Sidebar';
 import StatsCards from '../components/StatsCards';
 import {
@@ -15,6 +17,8 @@ import {
   fetchDashboardStats,
   fetchHabits,
   getLocalTodayDateString,
+  importHabitsBackup,
+  logoutAccount,
   toggleHabit,
   updateHabit,
 } from '../services/api';
@@ -31,7 +35,7 @@ function deriveStatsFromHabits(habitsList) {
   return { totalHabits, completedToday, pendingToday, bestStreak };
 }
 
-export default function DashboardPage() {
+export default function DashboardPage({ user, onUserUpdated, onSignedOut }) {
   const [todayStr, setTodayStr] = useState(() => getLocalTodayDateString());
   const [habits, setHabits] = useState([]);
   const [stats, setStats] = useState({
@@ -40,14 +44,24 @@ export default function DashboardPage() {
     pendingToday: 0,
     bestStreak: 0,
   });
+
+  // Filtering, search & sorting
   const [activeFilter, setActiveFilter] = useState('all');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('routine'); // 'routine' | 'streak' | 'alpha' | 'newest'
+
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [loadError, setLoadError] = useState('');
 
-  // Modal & in-flight states
+  // Drawer & Modals
+  const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [editingHabit, setEditingHabit] = useState(null);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
@@ -141,6 +155,15 @@ export default function DashboardPage() {
     };
   }, []);
 
+  const handleSignOut = async () => {
+    try {
+      await logoutAccount();
+    } catch {
+      // Proceed with local sign-out even if session already expired
+    }
+    onSignedOut();
+  };
+
   // Optimistic toggle + authoritative SQLite sync
   const handleToggleHabit = async (targetHabit) => {
     if (togglingIds.has(targetHabit.id)) return;
@@ -177,7 +200,6 @@ export default function DashboardPage() {
     setTogglingIds((prev) => new Set(prev).add(targetHabit.id));
 
     try {
-      // 2. Persist to SQLite and reconcile with recalculated history streak
       const result = await toggleHabit(targetHabit.id, {
         date: currentLocalDate,
         completed: nextCompleted,
@@ -277,16 +299,53 @@ export default function DashboardPage() {
     }
   };
 
+  const handleImportBackup = async (habitsArray) => {
+    setIsImporting(true);
+    try {
+      const result = await importHabitsBackup(habitsArray, getLocalTodayDateString());
+      setHabits(result.habits);
+      setStats(result.stats);
+      setIsImportModalOpen(false);
+      showToast(
+        `Imported ${result.summary.importedHabits} new, merged ${result.summary.mergedHabits} (${result.summary.importedCompletions} completions).`
+      );
+    } catch (err) {
+      showToast(err.message || 'Backup import failed.', 'error');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   const filteredHabits = useMemo(() => {
-    return habits.filter((h) => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+
+    const matches = habits.filter((h) => {
       if (activeFilter === 'completed' && !h.completedToday) return false;
       if (activeFilter === 'pending' && h.completedToday) return false;
       if (selectedCategory !== 'All' && (h.category || 'General') !== selectedCategory) {
         return false;
       }
+      if (normalizedQuery) {
+        const inName = h.name.toLowerCase().includes(normalizedQuery);
+        const inDesc = (h.description || '').toLowerCase().includes(normalizedQuery);
+        if (!inName && !inDesc) return false;
+      }
       return true;
     });
-  }, [habits, activeFilter, selectedCategory]);
+
+    const sorted = [...matches];
+    if (sortBy === 'streak') {
+      sorted.sort((a, b) => b.streak - a.streak || a.id - b.id);
+    } else if (sortBy === 'alpha') {
+      sorted.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortBy === 'newest') {
+      sorted.sort((a, b) => b.id - a.id);
+    } else {
+      sorted.sort((a, b) => a.id - b.id);
+    }
+
+    return sorted;
+  }, [habits, activeFilter, selectedCategory, searchQuery, sortBy]);
 
   const filterTabs = [
     { id: 'all', label: 'All', count: stats.totalHabits },
@@ -299,16 +358,23 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen flex bg-[#F7F9F8]">
       <Sidebar
+        user={user}
         activeFilter={activeFilter}
         onSelectFilter={setActiveFilter}
         stats={stats}
+        isMobileDrawerOpen={isMobileDrawerOpen}
+        onCloseMobileDrawer={() => setIsMobileDrawerOpen(false)}
         onOpenAddModal={handleOpenAddModal}
+        onOpenAccountSettings={() => setIsAccountModalOpen(true)}
+        onSignOut={handleSignOut}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
         <Header
           todayStr={todayStr}
+          onOpenMobileDrawer={() => setIsMobileDrawerOpen(true)}
           onOpenAddModal={handleOpenAddModal}
+          onOpenImportModal={() => setIsImportModalOpen(true)}
           onRefresh={() => loadDashboardData({ silent: true })}
           onExport={handleExportHabits}
           isRefreshing={isRefreshing}
@@ -339,7 +405,7 @@ export default function DashboardPage() {
             </div>
           ) : null}
 
-          {/* Habit List Section Header + Status & Category Filters */}
+          {/* Habit List Section Header + Search, Sort & Filters */}
           <section aria-labelledby="habits-heading" className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -381,35 +447,79 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* Category Filter Pills */}
+            {/* Search, Sort & Category Controls */}
             {habits.length > 0 ? (
-              <div
-                role="group"
-                aria-label="Filter habits by category"
-                className="flex items-center flex-wrap gap-1.5"
-              >
-                <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 mr-1">
-                  <Tag className="h-3.5 w-3.5" />
-                  Category:
-                </span>
-                {categoryFilterOptions.map((cat) => {
-                  const active = selectedCategory === cat;
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => setSelectedCategory(cat)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${
-                        active
-                          ? 'bg-slate-800 text-white border-slate-800'
-                          : 'bg-white text-slate-600 border-slate-200/80 hover:bg-slate-50'
-                      }`}
+              <div className="space-y-3">
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <div className="relative flex-1">
+                    <Search className="h-4 w-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search habits by name or description..."
+                      aria-label="Search habits"
+                      className="w-full rounded-xl bg-white border border-slate-200/90 pl-9 pr-8 py-2 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                    />
+                    {searchQuery ? (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery('')}
+                        aria-label="Clear search"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-slate-400 hover:text-slate-700"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="inline-flex items-center gap-2 rounded-xl bg-white border border-slate-200/90 px-3 py-2 shadow-sm shrink-0">
+                    <ArrowUpDown className="h-3.5 w-3.5 text-slate-400" />
+                    <label htmlFor="habit-sort-select" className="sr-only">
+                      Sort habits
+                    </label>
+                    <select
+                      id="habit-sort-select"
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value)}
+                      className="bg-transparent text-xs font-semibold text-slate-700 focus:outline-none cursor-pointer"
                     >
-                      {cat}
-                    </button>
-                  );
-                })}
+                      <option value="routine">Sort: Routine Order</option>
+                      <option value="streak">Sort: Highest Streak</option>
+                      <option value="newest">Sort: Newest First</option>
+                      <option value="alpha">Sort: A to Z</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div
+                  role="group"
+                  aria-label="Filter habits by category"
+                  className="flex items-center flex-wrap gap-1.5"
+                >
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 mr-1">
+                    <Tag className="h-3.5 w-3.5" />
+                    Category:
+                  </span>
+                  {categoryFilterOptions.map((cat) => {
+                    const active = selectedCategory === cat;
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setSelectedCategory(cat)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${
+                          active
+                            ? 'bg-slate-800 text-white border-slate-800'
+                            : 'bg-white text-slate-600 border-slate-200/80 hover:bg-slate-50'
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
 
@@ -430,6 +540,7 @@ export default function DashboardPage() {
                 onResetFilter={() => {
                   setActiveFilter('all');
                   setSelectedCategory('All');
+                  setSearchQuery('');
                 }}
                 togglingIds={togglingIds}
                 onToggle={handleToggleHabit}
@@ -464,6 +575,29 @@ export default function DashboardPage() {
           habit={calendarHabit}
           todayStr={todayStr}
           onClose={() => setCalendarHabit(null)}
+        />
+      ) : null}
+
+      {/* Import Backup Modal */}
+      {isImportModalOpen ? (
+        <ImportBackupModal
+          isSubmitting={isImporting}
+          onClose={() => setIsImportModalOpen(false)}
+          onImport={handleImportBackup}
+        />
+      ) : null}
+
+      {/* Account Settings Modal */}
+      {isAccountModalOpen ? (
+        <AccountSettingsModal
+          user={user}
+          onClose={() => setIsAccountModalOpen(false)}
+          onUserUpdated={onUserUpdated}
+          onAccountDeleted={() => {
+            setIsAccountModalOpen(false);
+            onSignedOut();
+          }}
+          onShowToast={showToast}
         />
       ) : null}
 

@@ -1,6 +1,10 @@
 import { fileURLToPath } from 'node:url';
+import { hashPassword } from '../utils/authUtils.js';
 import { getLocalDateString, shiftDateString } from '../utils/dateUtils.js';
 import { createDatabaseConnection } from './database.js';
+
+export const DEMO_USER_EMAIL = 'demo@habitflow.local';
+export const DEMO_USER_NAME = 'Demo Explorer';
 
 /**
  * Generates sample habits with categories and completion dates relative to `todayStr`.
@@ -39,46 +43,91 @@ export function getSampleHabitsData(todayStr) {
   }));
 }
 
-export function seedDatabaseIfNeeded(db, todayStr = getLocalDateString(), { forceReset = false } = {}) {
-  const alreadySeeded = db
-    .prepare("SELECT value FROM app_meta WHERE key = 'initial_seed_v1'")
-    .get();
+/**
+ * Ensures the built-in Demo account exists in `users` and returns its user record.
+ */
+export function ensureDemoUserRecord(db) {
+  const existing = db
+    .prepare('SELECT id, name, email, is_demo, created_at FROM users WHERE email = ?')
+    .get(DEMO_USER_EMAIL);
 
-  const existingHabitCount = db.prepare('SELECT COUNT(*) AS count FROM habits').get().count;
-
-  if (!forceReset && (alreadySeeded || existingHabitCount > 0)) {
-    return { seeded: false, count: existingHabitCount };
+  if (existing) {
+    return existing;
   }
 
+  const demoHash = hashPassword('DemoExplorer#2026!');
+  const result = db
+    .prepare(
+      'INSERT INTO users (name, email, password_hash, is_demo) VALUES (?, ?, ?, 1)'
+    )
+    .run(DEMO_USER_NAME, DEMO_USER_EMAIL, demoHash);
+
+  return db
+    .prepare('SELECT id, name, email, is_demo, created_at FROM users WHERE id = ?')
+    .get(Number(result.lastInsertRowid));
+}
+
+/**
+ * Seeds starter sample habits for a specific user ID inside a transaction.
+ */
+export function seedStarterHabitsForUser(db, userId, todayStr = getLocalDateString()) {
   const samples = getSampleHabitsData(todayStr);
+  const insertHabit = db.prepare(
+    'INSERT INTO habits (user_id, name, category, description) VALUES (?, ?, ?, ?)'
+  );
+  const insertCompletion = db.prepare(
+    'INSERT OR IGNORE INTO habit_completions (habit_id, completion_date) VALUES (?, ?)'
+  );
 
-  const runSeed = db.transaction(() => {
-    if (forceReset) {
-      db.prepare('DELETE FROM habits').run();
-    }
-
-    const insertHabit = db.prepare(
-      'INSERT INTO habits (name, category, description) VALUES (?, ?, ?)'
-    );
-    const insertCompletion = db.prepare(
-      'INSERT OR IGNORE INTO habit_completions (habit_id, completion_date) VALUES (?, ?)'
-    );
-
+  const run = db.transaction(() => {
     for (const sample of samples) {
-      const info = insertHabit.run(sample.name, sample.category, sample.description);
+      const info = insertHabit.run(userId, sample.name, sample.category, sample.description);
       const habitId = Number(info.lastInsertRowid);
       for (const completionDate of sample.completionDates) {
         insertCompletion.run(habitId, completionDate);
       }
     }
+  });
 
+  run();
+  return samples.length;
+}
+
+/**
+ * Seeds the Demo Explorer account once on initial database setup, or resets its habits when `forceReset` is true.
+ */
+export function seedDatabaseIfNeeded(
+  db,
+  todayStr = getLocalDateString(),
+  { forceReset = false } = {}
+) {
+  const demoUser = ensureDemoUserRecord(db);
+
+  const alreadySeeded = db
+    .prepare("SELECT value FROM app_meta WHERE key = 'initial_seed_v1'")
+    .get();
+
+  const existingDemoCount = db
+    .prepare('SELECT COUNT(*) AS count FROM habits WHERE user_id = ?')
+    .get(demoUser.id).count;
+
+  if (!forceReset && (alreadySeeded || existingDemoCount > 0)) {
+    return { seeded: false, count: existingDemoCount, demoUserId: demoUser.id };
+  }
+
+  const runResetAndSeed = db.transaction(() => {
+    if (forceReset) {
+      db.prepare('DELETE FROM habits WHERE user_id = ?').run(demoUser.id);
+    }
+    const insertedCount = seedStarterHabitsForUser(db, demoUser.id, todayStr);
     db.prepare(
       "INSERT OR REPLACE INTO app_meta (key, value) VALUES ('initial_seed_v1', ?)"
     ).run(new Date().toISOString());
+    return insertedCount;
   });
 
-  runSeed();
-  return { seeded: true, count: samples.length };
+  const count = runResetAndSeed();
+  return { seeded: true, count, demoUserId: demoUser.id };
 }
 
 const isDirectExecution =
@@ -90,8 +139,12 @@ if (isDirectExecution) {
   const result = seedDatabaseIfNeeded(db, getLocalDateString(), { forceReset });
   db.close();
   if (result.seeded) {
-    console.log(`Seeded ${result.count} sample habits successfully${forceReset ? ' (after reset)' : ''}.`);
+    console.log(
+      `Seeded ${result.count} demo habits successfully${forceReset ? ' (after reset)' : ''}.`
+    );
   } else {
-    console.log(`Database already initialized (${result.count} habits present). Use --reset to reseed.`);
+    console.log(
+      `Demo account already initialized (${result.count} habits). Use --reset to reseed.`
+    );
   }
 }

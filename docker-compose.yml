@@ -1,0 +1,21 @@
+services:
+  habitflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: habitflow-app
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      NODE_ENV: production
+      PORT: 5001
+      DB_PATH: /data/habitflow.db
+      BACKUP_DIR: /data/backups
+      SESSION_TTL_DAYS: 14
+      AUTO_SEED: "true"
+    volumes:
+      - habitflow_data:/data
+
+volumes:
+  habitflow_data:

@@ -10,7 +10,7 @@ export function getDashboardStats(req, res, next) {
   try {
     const todayStr = resolveTargetDate(req.query.date);
     const db = getDb();
-    const habits = queryAllFormattedHabits(db, todayStr);
+    const habits = queryAllFormattedHabits(db, req.user.id, todayStr);
     const stats = computeDashboardStats(habits);
 
     return res.status(200).json({

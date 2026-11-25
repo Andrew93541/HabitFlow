@@ -1,19 +1,14 @@
-# HabitFlow Multi-Layer Test & Verification Plan
+# HabitFlow 10-Layer Production Test & Verification Matrix (`v2.0.0`)
 
-## Test Layers Covered
-
-| Layer | Scope | Tooling / Location | Status |
+| Layer | Scope | Verification Command / Suite | Status |
 | :--- | :--- | :--- | :--- |
-| **Layer 1: Static Analysis & Build** | ES module syntax checks, React Hooks ESLint rules, production Vite bundle | `npm run lint`, `npm --prefix server run lint`, `npm run build` | PASS |
-| **Layer 2: Unit Testing** | `dateUtils.js`, `streakUtils.js` (`calculateStreak` + `calculateLongestStreak`), and `exportUtils.js` (category normalization + RFC 4180 CSV escaping & formula-injection protection) | `server/tests/streak.test.js` (`node --test`, 12 tests) | PASS |
-| **Layer 3 & 4: DB & API Integration** | Real Express HTTP server + isolated SQLite database testing non-destructive v1→v2 `ALTER TABLE` migration, CRUD + categories, `/history`, `/export` (`csv` & `json`), atomic `/toggle`, `UNIQUE` constraint, and `ON DELETE CASCADE` | `server/tests/api.test.js` (`node --test`, 5 tests) | PASS |
-| **Layer 5 & 8: UI & Accessibility** | Green habit text (`text-emerald-600`) on check, revert on uncheck, category filter pills, Monthly Calendar Heatmap modal, CSV export download trigger, Add/Edit/Delete modals, Empty State | `client/src/tests/Dashboard.test.jsx` (`vitest` + Testing Library, 4 tests) | PASS |
-| **Layer 6: Security Checks** | `npm audit` (0 vulnerabilities in server and client), SQL injection literal escaping test, malformed payload rejection (`400`), security headers check | `server/tests/api.test.js` + `npm audit` | PASS |
-| **Layer 10: Live Smoke & E2E** | Dual live servers (`localhost:5001` & `localhost:5173`) verified in real Chrome browser across full user journeys + browser refresh persistence | Live Browser Verification | Verified in Phase H |
-
-## Running All Automated Checks
-```bash
-npm run lint
-npm test
-npm run build
-```
+| **Layer 1: Static Analysis & Build** | Node ES module syntax across all backend modules, React Hooks ESLint rules, production Vite bundle | `npm run lint && npm run build` | PASS |
+| **Layer 2: Unit Testing** | `dateUtils.js`, `streakUtils.js` (`calculateStreak`, `calculateLongestStreak`), `authUtils.js` (`scrypt`, `timingSafeEqual`, SHA-256 tokens, null-prototype cookie parser), `exportUtils.js` (CSV escaping & formula-injection defense) | `server/tests/streak.test.js` (`14` unit tests) | PASS |
+| **Layer 3: Component & Database** | Legacy `v1`→`v2` multi-tenant migration without data loss, `UNIQUE(habit_id, completion_date)`, `users -> habits -> habit_completions` cascade deletes, online `.backup()` snapshot | `server/tests/api.test.js` + `Dashboard.test.jsx` | PASS |
+| **Layer 4: Integration Testing** | Full Express + SQLite HTTP contract across Auth, Profile, Password rotation, Habits CRUD, Toggle, Monthly History, CSV/JSON Export, and JSON Backup Import/Merge | `server/tests/api.test.js` (`7` integration suites) | PASS |
+| **Layer 5: End-to-End User Flows** | Unauthenticated `AuthPage` → 1-Click Demo Login → Check/Uncheck green text & streak → Search & Category Filter → Monthly Heatmap → Mobile Drawer → CSV Export → Sign Out | `client/src/tests/Dashboard.test.jsx` (`5` UI journey tests) | PASS |
+| **Layer 6: Security Testing** | `npm run audit:all` (`0` vulnerabilities), `401` auth gate, `403` CSRF header enforcement, `429` rate limiting + `Retry-After`, cross-user IDOR (`404` on Alice/Bob habit IDs), SQLi & CSVi payloads, CSP/nosniff/DENY headers | `server/tests/api.test.js` + `npm run audit:all` | PASS |
+| **Layer 7: Performance & Resilience** | 20-request parallel read/toggle concurrency stress test (`busy_timeout = 5000` + WAL), React `ErrorBoundary`, live `OfflineBanner` | `server/tests/api.test.js` + `ErrorBoundary.jsx` | PASS |
+| **Layer 8: Accessibility & Compatibility** | Semantic dialogs (`role="dialog"`, `aria-modal`), `Escape` key dismissal, labelled checkboxes/inputs, keyboard-accessible tabs/radios/menus, mobile slide-over drawer | `client/src/tests/Dashboard.test.jsx` | PASS |
+| **Layer 9: Regression Testing** | Core assignment behavior (`text-emerald-600` green text, `+1` independent streak, `0`-floor same-day uncheck, missed-day reset) verified after v2.0 upgrade | Full test suite (`npm test`) | PASS |
+| **Layer 10: Staging & Production Smoke** | Single-port `NODE_ENV=production` Express static SPA + `/api/health` + live `server/data/habitflow.db` migration + online backup verification | Live Production Smoke Check | PASS |

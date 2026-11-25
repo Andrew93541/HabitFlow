@@ -1,0 +1,44 @@
+name: HabitFlow CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Lint, Security Audit, Test & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Install backend & frontend dependencies
+        run: npm run install:all
+
+      - name: Dependency vulnerability audit
+        run: |
+          npm --prefix server audit --audit-level=moderate
+          npm --prefix client audit --audit-level=moderate
+
+      - name: Static syntax & ESLint checks
+        run: |
+          npm --prefix server run lint
+          npm run lint
+
+      - name: Execute backend & frontend test suites
+        run: npm test
+
+      - name: Build production frontend bundle
+        run: npm run build

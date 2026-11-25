@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: habitflow
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5001
+      - key: DB_PATH
+        value: /data/habitflow.db
+      - key: BACKUP_DIR
+        value: /data/backups
+      - key: SESSION_TTL_DAYS
+        value: 14
+      - key: TRUST_PROXY
+        value: "true"
+    disk:
+      name: habitflow-sqlite-data
+      mountPath: /data
+      sizeGB: 1

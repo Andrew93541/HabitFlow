@@ -8,13 +8,19 @@ import {
 import { computeDashboardStats, formatHabitWithMetrics } from '../utils/streakUtils.js';
 
 /**
- * Queries all habits and their completion history in two indexed queries (no N+1)
- * and enriches each habit with `completedToday`, `streak`, `longestStreak`, and `recentHistory`.
+ * Queries all habits belonging strictly to `userId` and enriches each with streak metrics.
  */
-export function queryAllFormattedHabits(db, todayStr, { includeFullDates = false } = {}) {
+export function queryAllFormattedHabits(
+  db,
+  userId,
+  todayStr,
+  { includeFullDates = false } = {}
+) {
   const habits = db
-    .prepare('SELECT id, name, category, description, created_at FROM habits ORDER BY id ASC')
-    .all();
+    .prepare(
+      'SELECT id, name, category, description, created_at FROM habits WHERE user_id = ? ORDER BY id ASC'
+    )
+    .all(userId);
 
   if (habits.length === 0) {
     return [];
@@ -22,9 +28,13 @@ export function queryAllFormattedHabits(db, todayStr, { includeFullDates = false
 
   const completions = db
     .prepare(
-      'SELECT habit_id, completion_date FROM habit_completions ORDER BY completion_date DESC'
+      `SELECT hc.habit_id, hc.completion_date
+       FROM habit_completions hc
+       JOIN habits h ON h.id = hc.habit_id
+       WHERE h.user_id = ?
+       ORDER BY hc.completion_date DESC`
     )
-    .all();
+    .all(userId);
 
   const completionsByHabit = new Map();
   for (const row of completions) {
@@ -45,12 +55,20 @@ export function queryAllFormattedHabits(db, todayStr, { includeFullDates = false
 }
 
 /**
- * Queries a single habit by ID and formats it with live streak metrics.
+ * Queries a single habit owned by `userId` and formats it with live streak metrics.
  */
-export function querySingleFormattedHabit(db, habitId, todayStr, { includeFullDates = false } = {}) {
+export function querySingleFormattedHabit(
+  db,
+  userId,
+  habitId,
+  todayStr,
+  { includeFullDates = false } = {}
+) {
   const habit = db
-    .prepare('SELECT id, name, category, description, created_at FROM habits WHERE id = ?')
-    .get(habitId);
+    .prepare(
+      'SELECT id, name, category, description, created_at FROM habits WHERE id = ? AND user_id = ?'
+    )
+    .get(habitId, userId);
 
   if (!habit) {
     return null;
@@ -78,7 +96,7 @@ export function getHabits(req, res, next) {
     const todayStr = resolveTargetDate(req.query.date);
     const rawCategory = req.query.category;
     const db = getDb();
-    let habits = queryAllFormattedHabits(db, todayStr);
+    let habits = queryAllFormattedHabits(db, req.user.id, todayStr);
 
     if (rawCategory && rawCategory.toLowerCase() !== 'all') {
       const normalized = normalizeCategory(rawCategory);
@@ -96,7 +114,6 @@ export function getHabits(req, res, next) {
 
 /**
  * GET /api/habits/:id/history
- * Returns complete completion dates and streak breakdown for the Monthly Calendar Heatmap modal.
  */
 export function getHabitHistory(req, res, next) {
   try {
@@ -104,7 +121,7 @@ export function getHabitHistory(req, res, next) {
     const { habitId } = req;
     const db = getDb();
 
-    const habitWithDates = querySingleFormattedHabit(db, habitId, todayStr, {
+    const habitWithDates = querySingleFormattedHabit(db, req.user.id, habitId, todayStr, {
       includeFullDates: true,
     });
 
@@ -130,7 +147,6 @@ export function getHabitHistory(req, res, next) {
 
 /**
  * GET /api/habits/export?format=csv|json&date=YYYY-MM-DD
- * Exports all habits and completion history as a downloadable CSV or JSON file.
  */
 export function exportHabitsData(req, res, next) {
   try {
@@ -144,7 +160,7 @@ export function exportHabitsData(req, res, next) {
     }
 
     const db = getDb();
-    const habitsWithHistory = queryAllFormattedHabits(db, todayStr, {
+    const habitsWithHistory = queryAllFormattedHabits(db, req.user.id, todayStr, {
       includeFullDates: true,
     });
     const stats = computeDashboardStats(habitsWithHistory);
@@ -172,6 +188,79 @@ export function exportHabitsData(req, res, next) {
 }
 
 /**
+ * POST /api/habits/import
+ * Imports habits and completion dates from a JSON backup into the authenticated user's account.
+ * Merges completion dates into existing habits when names match case-insensitively.
+ */
+export function importHabitsData(req, res, next) {
+  try {
+    const todayStr = resolveTargetDate(req.body?.date ?? req.query.date);
+    const incomingHabits = req.validatedImportHabits;
+    const userId = req.user.id;
+    const db = getDb();
+
+    const executeImport = db.transaction(() => {
+      const existingRows = db
+        .prepare('SELECT id, name FROM habits WHERE user_id = ?')
+        .all(userId);
+
+      const byLowerName = new Map(
+        existingRows.map((row) => [row.name.trim().toLowerCase(), row.id])
+      );
+
+      const insertHabit = db.prepare(
+        'INSERT INTO habits (user_id, name, category, description) VALUES (?, ?, ?, ?)'
+      );
+      const insertCompletion = db.prepare(
+        'INSERT OR IGNORE INTO habit_completions (habit_id, completion_date) VALUES (?, ?)'
+      );
+
+      let importedHabits = 0;
+      let mergedHabits = 0;
+      let importedCompletions = 0;
+
+      for (const item of incomingHabits) {
+        const key = item.name.toLowerCase();
+        let targetHabitId = byLowerName.get(key);
+
+        if (targetHabitId) {
+          mergedHabits += 1;
+        } else {
+          const info = insertHabit.run(
+            userId,
+            item.name,
+            item.category,
+            item.description
+          );
+          targetHabitId = Number(info.lastInsertRowid);
+          byLowerName.set(key, targetHabitId);
+          importedHabits += 1;
+        }
+
+        for (const dateStr of item.completionDates) {
+          const resInfo = insertCompletion.run(targetHabitId, dateStr);
+          importedCompletions += resInfo.changes;
+        }
+      }
+
+      const habits = queryAllFormattedHabits(db, userId, todayStr);
+      const stats = computeDashboardStats(habits);
+
+      return {
+        summary: { importedHabits, mergedHabits, importedCompletions },
+        habits,
+        stats,
+      };
+    });
+
+    const result = executeImport();
+    return res.status(200).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+/**
  * POST /api/habits
  */
 export function createHabit(req, res, next) {
@@ -181,10 +270,17 @@ export function createHabit(req, res, next) {
     const db = getDb();
 
     const result = db
-      .prepare('INSERT INTO habits (name, category, description) VALUES (?, ?, ?)')
-      .run(name, category, description);
+      .prepare(
+        'INSERT INTO habits (user_id, name, category, description) VALUES (?, ?, ?, ?)'
+      )
+      .run(req.user.id, name, category, description);
 
-    const createdHabit = querySingleFormattedHabit(db, Number(result.lastInsertRowid), todayStr);
+    const createdHabit = querySingleFormattedHabit(
+      db,
+      req.user.id,
+      Number(result.lastInsertRowid),
+      todayStr
+    );
     return res.status(201).json(createdHabit);
   } catch (err) {
     return next(err);
@@ -202,14 +298,16 @@ export function updateHabit(req, res, next) {
     const db = getDb();
 
     const result = db
-      .prepare('UPDATE habits SET name = ?, category = ?, description = ? WHERE id = ?')
-      .run(name, category, description, habitId);
+      .prepare(
+        'UPDATE habits SET name = ?, category = ?, description = ? WHERE id = ? AND user_id = ?'
+      )
+      .run(name, category, description, habitId, req.user.id);
 
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Habit not found.' });
     }
 
-    const updatedHabit = querySingleFormattedHabit(db, habitId, todayStr);
+    const updatedHabit = querySingleFormattedHabit(db, req.user.id, habitId, todayStr);
     return res.status(200).json(updatedHabit);
   } catch (err) {
     return next(err);
@@ -224,7 +322,9 @@ export function deleteHabit(req, res, next) {
     const { habitId } = req;
     const db = getDb();
 
-    const result = db.prepare('DELETE FROM habits WHERE id = ?').run(habitId);
+    const result = db
+      .prepare('DELETE FROM habits WHERE id = ? AND user_id = ?')
+      .run(habitId, req.user.id);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Habit not found.' });
     }
@@ -247,12 +347,13 @@ export function toggleHabitCompletion(req, res, next) {
     const desiredState =
       typeof req.body?.completed === 'boolean' ? req.body.completed : undefined;
     const { habitId } = req;
+    const userId = req.user.id;
     const db = getDb();
 
     const executeToggle = db.transaction(() => {
       const existingHabit = db
-        .prepare('SELECT id FROM habits WHERE id = ?')
-        .get(habitId);
+        .prepare('SELECT id FROM habits WHERE id = ? AND user_id = ?')
+        .get(habitId, userId);
 
       if (!existingHabit) {
         const notFoundErr = new Error('Habit not found.');
@@ -279,8 +380,8 @@ export function toggleHabitCompletion(req, res, next) {
         ).run(habitId, todayStr);
       }
 
-      const updatedHabit = querySingleFormattedHabit(db, habitId, todayStr);
-      const stats = computeDashboardStats(queryAllFormattedHabits(db, todayStr));
+      const updatedHabit = querySingleFormattedHabit(db, userId, habitId, todayStr);
+      const stats = computeDashboardStats(queryAllFormattedHabits(db, userId, todayStr));
       return { habit: updatedHabit, stats };
     });
 
